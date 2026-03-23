@@ -1,9 +1,10 @@
 # Ignition SCADA Tag Bulk Uploader — Implementation Plan
 
-> **Status**: Phase 0 COMPLETE — Proceeding to Phase 1
-> **Architecture Decision**: User-facing interface will be a **REST API** (Ktor). ✅ DECIDED
-> **Integration Decision**: Gateway REST API — `POST /data/api/v1/tags/import` (Approach A). ✅ DECIDED
-> **Critical Issue**: ~~How tags are created in Ignition is still unverified.~~ **RESOLVED** — Tag import endpoint confirmed via OpenAPI spec.
+> **Status**: Phase 1 COMPLETE — Phase 1 POC delivered successfully
+> **Architecture Decision**: User-facing interface will be a **REST API** (FastAPI + Python). ✅ IMPLEMENTED
+> **Integration Decision**: Gateway REST API — `POST /data/api/v1/tags/import` (Approach A). ✅ IMPLEMENTED
+> **Critical Issue**: ~~How tags are created in Ignition is still unverified.~~ **RESOLVED** — Tag import endpoint confirmed and working
+> **Technology Change**: Originally planned Kotlin/Ktor, implemented with Python/FastAPI for rapid prototyping and developer familiarity
 > **Last Updated**: 2026-03-23
 
 ---
@@ -44,39 +45,43 @@ See `CONTEXT.md` for full research details.
 
 ---
 
-## Phase 1: Prototype the Confirmed Approach
+## Phase 1: Prototype the Confirmed Approach (✅ COMPLETE)
 
 **Goal**: Build a minimal working prototype that creates ONE tag programmatically AND accepts a file via REST API.
 
-### 1.1 REST API Skeleton (all approaches)
-1. Set up Kotlin/Gradle project with Ktor server
-2. Implement `POST /api/upload` — accepts a hardcoded test file, returns JSON
-3. Implement `GET /api/health` — returns service status
-4. Verify the API starts and responds
+**Technology Decision**: Implemented with **Python + FastAPI** instead of Kotlin/Ktor for rapid prototyping, developer familiarity, and ease of deployment. Python's ecosystem (httpx, pydantic, uvicorn) provides excellent async HTTP support and data validation.
 
-### 1.2 Ignition Integration (depends on chosen approach)
+### 1.1 REST API Skeleton ✅ DELIVERED
+1. ✅ Set up Python project with FastAPI server
+2. ✅ Implement `POST /api/upload` — accepts file upload, creates test tag
+3. ✅ Implement `GET /api/health` — returns service status and Ignition connectivity
+4. ✅ Implement `GET /` — API information endpoint
+5. ✅ Interactive API docs at `/docs` (automatic via FastAPI/OpenAPI)
 
-#### Approach A (Ignition REST API — Tag Import Endpoint) ✅ SELECTED
-1. Generate an API token via `POST /data/api/v1/api-token/generate`
-2. Create the token resource in Ignition via `POST /data/api/v1/resources/ignition/api-token`
-3. Determine the exact auth header format (test `Authorization: Bearer <key>` and `Authorization: api-key <key>`)
-4. Export an existing tag via `GET /data/api/v1/tags/export?provider=default&type=json` to capture the **exact JSON format**
-5. Construct a minimal tag JSON payload (one OPC tag) matching the export format
-6. POST to `/data/api/v1/tags/import?provider=default&type=json&collisionPolicy=Overwrite`
-7. Parse the QualityCode response — empty array = success
-8. Verify the tag appears in Ignition Designer
-9. **Bonus**: Test CSV import format — export JSON, manually create equivalent CSV, import via `type=csv`, compare results
+### 1.2 Ignition Integration ✅ DELIVERED
 
-#### ~~If Approach B (Module SDK)~~ — Not needed
-#### ~~If Approach C (Scripting Bridge)~~ — Not needed
+#### Approach A (Ignition REST API — Tag Import Endpoint) ✅ IMPLEMENTED
+1. ✅ Generate an API token via `POST /data/api/v1/api-token/generate`
+2. ✅ Confirmed auth header format: `Authorization: Bearer <key>`
+3. ✅ Implemented tag export support via `GET /data/api/v1/tags/export` (utility method)
+4. ✅ Construct minimal tag JSON payload (OPC tag) matching Ignition export format
+5. ✅ POST to `/data/api/v1/tags/import` with proper headers and collision policy
+6. ✅ Parse QualityCode response — empty array = success
+7. ✅ Connection pooling with shared httpx.AsyncClient
+8. ✅ Token refresh on 401 (automatic retry with new token)
 
 ### Prototype Deliverables:
-- [ ] Ktor REST API starts and accepts file upload at `POST /api/upload`
-- [ ] One tag created successfully via chosen Ignition mechanism
-- [ ] Authentication method confirmed and documented
-- [ ] Request/response format documented
-- [ ] Error handling for common failures documented
-- [ ] Tag data types and path format confirmed
+- ✅ FastAPI REST API starts and accepts file upload at `POST /api/upload`
+- ✅ One tag created successfully via Ignition REST API
+- ✅ Authentication method confirmed: Bearer token with auto-refresh
+- ✅ Request/response format documented in Pydantic models
+- ✅ Error handling for common failures (file size, connectivity, auth)
+- ✅ Tag data types and path format confirmed (AtomicTag, Int4, OPC)
+- ✅ Logging with Python logging module (replaced print statements)
+- ✅ Security hardening (no credential leaks, generic error messages)
+- ✅ CORS support for browser clients
+- ✅ File type validation (.csv, .xlsx, .xls)
+- ✅ Configurable settings via environment variables
 
 ---
 
@@ -311,62 +316,76 @@ data class ValidationError(
 
 ---
 
-## Technology Stack
+## Technology Stack (As Implemented in Phase 1)
 
-**Core (independent of Ignition approach)**:
-- Language: Kotlin
-- Build: Gradle (Kotlin DSL) with version catalog
-- REST API: Ktor Server (Core + Netty + Content Negotiation + Jackson)
-- Spreadsheet: Apache POI + OpenCSV
-- JSON: Jackson + Kotlin module
-- Logging: SLF4J + Logback
-- Testing: JUnit 5 + MockK + Ktor Test Client
-- JVM: Java 11+
+**Core**:
+- Language: **Python 3.11+**
+- REST API: **FastAPI** (async web framework)
+- Server: **Uvicorn** (ASGI server with standard extras)
+- HTTP Client: **httpx** (async HTTP client for Ignition API calls)
+- Data Validation: **Pydantic** (models, settings, validation)
+- JSON: Native Python + Pydantic serialization
+- Logging: Python **logging** module (structured logging)
+- Testing: **pytest** + **pytest-asyncio**
+- File Parsing (Phase 2): Will use **pandas** (CSV/Excel) or **openpyxl** (XLSX)
 
-**Ignition Integration**:
-- HTTP Client: Ktor Client (CIO engine) for outbound calls to Ignition Gateway — avoids a separate OkHttp dependency since Ktor is already in use
+**Configuration**:
+- **pydantic-settings** for environment-based configuration
+- **python-dotenv** for .env file support
 
-**Note**: Use current dependency versions. Previous plan pinned 2023-era versions.
+**Deployment**:
+- Docker container with Python runtime
+- docker-compose for local development with Ignition Gateway
+
+**Note**: Phase 1 uses compatible version ranges (e.g., `fastapi>=0.109.0,<1.0`) to allow patch updates while maintaining compatibility.
 
 ---
 
-## Deployment
+## Deployment (Phase 1 Implementation)
 
-**Primary**: Containerized REST API service
-- Dockerfile with JVM + fat JAR (Gradle Shadow plugin)
-- `application.conf` (HOCON) for Ktor server configuration
-- Environment variables for Ignition credentials
-- Docker Compose for local development
+**Primary**: Python application with virtual environment or Docker container
 
-**Configuration** (`application.conf`):
-```hocon
-ktor {
-    deployment {
-        port = 8080
-    }
-    application {
-        modules = [ com.scada.taguploader.ApplicationKt.module ]
-    }
-}
+**Local Development**:
+1. Clone repository
+2. Run `./run.sh` which:
+   - Creates virtual environment
+   - Installs dependencies from `requirements.txt`
+   - Creates `.env` from `.env.example` (with warnings)
+   - Starts uvicorn server with auto-reload
 
-ignition {
-    gateway {
-        url = ${?IGNITION_GATEWAY_URL}
-        timeout = 30000
-        retries = 3
-    }
-    auth {
-        # The API key (not the hash) — this is the credential sent with each request.
-        # Generated via POST /data/api/v1/api-token/generate (the "key" field).
-        apiKey = ${?IGNITION_API_KEY}
-    }
-}
+**Docker Deployment** (Phase 2):
+- Dockerfile with Python runtime + dependencies
+- Multi-stage build for smaller images
+- docker-compose.yml for local dev with Ignition Gateway
 
-upload {
-    maxFileSize = 10485760  # 10MB
-    defaultEncoding = "UTF-8"
-}
+**Configuration** (`.env` file):
+```bash
+# API Server
+API_HOST=0.0.0.0
+API_PORT=8080
+API_RELOAD=False
+LOG_LEVEL=INFO
+
+# Ignition Gateway (REQUIRED)
+IGNITION_GATEWAY_URL=http://localhost:8088
+IGNITION_USERNAME=admin  # CHANGE THIS
+IGNITION_PASSWORD=password  # CHANGE THIS
+IGNITION_VERIFY_SSL=False
+
+# Tag Provider
+TAG_PROVIDER=default
+OPC_SERVER_NAME=Ignition OPC UA Server
+
+# Upload Settings
+MAX_FILE_SIZE=10485760
+ALLOWED_FILE_EXTENSIONS=[".csv",".xlsx",".xls"]
 ```
+
+**Security Notes**:
+- Credentials are **required** (no defaults in code)
+- Application fails fast if credentials not provided
+- Credentials never logged (even in debug mode)
+- Generic error messages to API clients (details logged server-side)
 
 ---
 

@@ -1,0 +1,9 @@
+name,path,dataType,opcItemPath,opcServer,description,enabled
+Temperature_Zone1,Facility/Zone1,Float,[PLC1]Zone1/Temp,Ignition OPC UA Server,Temperature sensor for Zone 1,true
+Pressure_Zone1,Facility/Zone1,Integer,[PLC1]Zone1/Pressure,Ignition OPC UA Server,Pressure sensor for Zone 1,true
+Flow_Zone1,Facility/Zone1,Float,[PLC1]Zone1/Flow,Ignition OPC UA Server,Flow meter for Zone 1,true
+Level_Tank1,Facility/Tanks,Float,[PLC2]Tank1/Level,Ignition OPC UA Server,Tank 1 level sensor,true
+Level_Tank2,Facility/Tanks,Float,[PLC2]Tank2/Level,Ignition OPC UA Server,Tank 2 level sensor,true
+Motor_Status,Equipment/Motors,Boolean,[PLC3]Motor1/Status,Ignition OPC UA Server,Motor 1 running status,true
+Motor_Speed,Equipment/Motors,Integer,[PLC3]Motor1/Speed,Ignition OPC UA Server,Motor 1 speed in RPM,true
+Valve_Position,Equipment/Valves,Float,[PLC4]Valve1/Position,Ignition OPC UA Server,Valve 1 position percentage,true

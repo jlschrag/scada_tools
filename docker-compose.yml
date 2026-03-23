@@ -1,0 +1,23 @@
+services:
+  ignition:
+    image: inductiveautomation/ignition:8.1.33
+    container_name: ignition-gateway
+    ports:
+      - "8088:8088"  # HTTP
+      - "8043:8043"  # HTTPS
+    environment:
+      - ACCEPT_IGNITION_EULA=Y
+      - GATEWAY_ADMIN_USERNAME=admin
+      - GATEWAY_ADMIN_PASSWORD=password
+      - IGNITION_EDITION=standard
+    volumes:
+      - ignition-data:/usr/local/bin/ignition/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8088/system/gwinfo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  ignition-data:
