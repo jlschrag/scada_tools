@@ -1,8 +1,9 @@
 # Ignition SCADA Tag Bulk Uploader — Implementation Plan
 
-> **Status**: BLOCKED on Ignition integration research (Phase 0)
+> **Status**: Phase 0 COMPLETE — Proceeding to Phase 1
 > **Architecture Decision**: User-facing interface will be a **REST API** (Ktor). ✅ DECIDED
-> **Critical Issue**: How tags are created in Ignition is still unverified. Phase 0 must complete before integration code is written.
+> **Integration Decision**: Gateway REST API — `POST /data/api/v1/tags/import` (Approach A). ✅ DECIDED
+> **Critical Issue**: ~~How tags are created in Ignition is still unverified.~~ **RESOLVED** — Tag import endpoint confirmed via OpenAPI spec.
 > **Last Updated**: 2026-03-23
 
 ---
@@ -23,7 +24,7 @@ There are three possible mechanisms. We must determine which one(s) work before 
 
 ---
 
-## Phase 0: Research & Verification (CURRENT — BLOCKING)
+## Phase 0: Research & Verification (✅ COMPLETE)
 
 **Goal**: Determine which tag-creation mechanism to use, with evidence.
 
@@ -82,20 +83,18 @@ There are three possible mechanisms. We must determine which one(s) work before 
 
 **Deliverable**: Document whether the Module SDK provides tag creation APIs and what the module packaging/deployment requirements are.
 
-### 0.4 Decision Gate
-
-After completing 0.1–0.3, fill in this decision matrix:
+### 0.4 Decision Gate ✅ COMPLETE
 
 | Question | Answer |
 |----------|--------|
-| Does the OpenAPI have a tag creation endpoint? | YES / NO |
-| What is the endpoint path and method? | _fill in_ |
-| Does `system.tag.configure()` work for our use case? | YES / NO |
-| Is the WebDev module available in the target environment? | YES / NO |
-| Do we need a full Ignition Module? | YES / NO |
-| **Chosen approach**: | A / B / C |
+| Does the OpenAPI have a tag creation endpoint? | **YES** — `POST /data/api/v1/tags/import` |
+| What is the endpoint path and method? | `POST /data/api/v1/tags/import?provider=<name>&type=json&collisionPolicy=<policy>&path=<optional>` |
+| Does `system.tag.configure()` work for our use case? | Yes, but **not needed** — REST API is sufficient |
+| Is the WebDev module available in the target environment? | **Not needed** — REST API is sufficient |
+| Do we need a full Ignition Module? | **NO** |
+| **Chosen approach**: | **A — Gateway REST API (Tag Import endpoint)** |
 
-**Then and only then**: proceed to Phase 1.
+**Phase 0 complete. Proceeding to Phase 1.**
 
 ---
 
@@ -111,24 +110,19 @@ After completing 0.1–0.3, fill in this decision matrix:
 
 ### 1.2 Ignition Integration (depends on chosen approach)
 
-#### If Approach A (Ignition REST API):
-1. Implement minimal OkHttp client
-2. Authenticate against Gateway
-3. POST a single tag creation request
-4. Verify tag appears in Ignition Designer
+#### Approach A (Ignition REST API — Tag Import Endpoint) ✅ SELECTED
+1. Generate an API token via `POST /data/api/v1/api-token/generate`
+2. Create the token resource in Ignition via `POST /data/api/v1/resources/ignition/api-token`
+3. Determine the exact auth header format (test `Authorization: Bearer <key>` and `Authorization: api-key <key>`)
+4. Export an existing tag via `GET /data/api/v1/tags/export?provider=default&type=json` to capture the **exact JSON format**
+5. Construct a minimal tag JSON payload (one OPC tag) matching the export format
+6. POST to `/data/api/v1/tags/import?provider=default&type=json&collisionPolicy=Overwrite`
+7. Parse the QualityCode response — empty array = success
+8. Verify the tag appears in Ignition Designer
+9. **Bonus**: Test CSV import format — export JSON, manually create equivalent CSV, import via `type=csv`, compare results
 
-#### If Approach B (Module SDK):
-1. Set up Ignition Module project from SDK template
-2. Implement `GatewayModuleHook` with tag creation in `setup()`
-3. Use `GatewayContext.getTagManager()` to create one tag
-4. Build `.modl`, install in Gateway, verify tag appears
-5. Determine how the REST API service communicates with the module
-
-#### If Approach C (Scripting Bridge):
-1. Set up WebDev module endpoint on Gateway (manual step)
-2. Write Python script endpoint that calls `system.tag.configure()`
-3. Implement OkHttp client to POST tag data to WebDev endpoint
-4. Verify tag appears in Ignition Designer
+#### ~~If Approach B (Module SDK)~~ — Not needed
+#### ~~If Approach C (Scripting Bridge)~~ — Not needed
 
 ### Prototype Deliverables:
 - [ ] Ktor REST API starts and accepts file upload at `POST /api/upload`
@@ -166,12 +160,20 @@ After completing 0.1–0.3, fill in this decision matrix:
 4. Detailed error reporting with row/column info
 
 ### 2.4 Tag Creation Client (2 days)
-1. `IgnitionTagClient` — implements chosen approach (A, B, or C)
-2. Authentication handling
-3. Retry logic with exponential backoff
-4. Rate limiting / throttling
-5. Batch support (if available)
-6. Integration tests against mock or real Gateway
+1. `IgnitionImportClient` — uses `POST /data/api/v1/tags/import` endpoint
+   - Takes a list of `TagDefinition`, serializes to Ignition JSON export format
+   - POSTs as `application/octet-stream` with `type=json`
+2. Authentication handling — API Token key (generated via `/data/api/v1/api-token/generate`)
+3. Collision policy mapping:
+   - `DuplicateStrategy.SKIP` → `Ignore`
+   - `DuplicateStrategy.UPDATE` → `MergeOverwrite`
+   - `DuplicateStrategy.FAIL` → `Abort`
+4. Response parsing — `List<QualityCode>` with `{ level, userCode, diagnosticMessage }`
+   - Empty array = all tags imported successfully
+   - Non-empty = report per-tag errors
+5. Retry logic with exponential backoff
+6. Batching strategy — one POST with all tags; for very large imports (10k+), chunk into multiple POSTs
+7. Integration tests against mock or real Gateway
 
 ### 2.5 Orchestrator (1 day)
 1. `TagUploader` — coordinates parse → validate → create

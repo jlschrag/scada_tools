@@ -1,52 +1,60 @@
 # Implementation Context & Reference Guide
 
-## ⚠️ CRITICAL BLOCKER: Tag Creation Mechanism Unverified
+## ✅ RESOLVED: Tag Creation Mechanism Confirmed
 
 **Date**: 2026-03-23
-**Status**: OPEN — Must be resolved before any implementation
+**Status**: RESOLVED — Tag import endpoint confirmed via OpenAPI spec analysis
 
-The previous plan assumed Ignition 8.3 exposes a REST API endpoint (e.g., `POST /api/v1/tags`) for creating tags. **This has not been verified.** The reviewer flagged this as the #1 critical issue.
+### Findings from OpenAPI Spec (`ignition_openapi_spec_1_0_0.json`)
 
-### What We Know
+**Q1: Does the OpenAPI have a tag creation endpoint?**
+- **YES** — via `POST /data/api/v1/tags/import`. There is NO individual tag CRUD endpoint (no `POST /api/v1/tags`), but the **import endpoint IS the creation mechanism**. It accepts binary payloads of tag definitions in JSON, XML, or CSV format.
 
-**About Ignition's OpenAPI (Gateway REST API)**:
-- Ignition 8.x includes an OpenAPI specification at the Gateway level
-- Documented at: https://www.docs.inductiveautomation.com/docs/8.3/platform/gateway/openapi
-- The spec is accessible at `https://<gateway>:8043/system/openapi.json`
-- **Unknown**: Whether tag creation/configuration endpoints are included
-- **Risk**: The OpenAPI has historically focused on system status, alarming, and project resources — NOT tag CRUD operations
+**Q2: What is the exact format the import endpoint expects?**
+- Request body: `application/octet-stream` — raw bytes of an export file
+- Required query params: `provider` (string), `type` (`json`|`xml`|`csv`), `collisionPolicy` (`Abort`|`Overwrite`|`Rename`|`Ignore`|`MergeOverwrite`)
+- Optional query param: `path` (target folder path)
+- The export endpoint (`GET /data/api/v1/tags/export`) produces `json` and `xml` (NOT csv)
+- **Recommended strategy**: Generate **Ignition JSON export format** for the import payload (not CSV), since JSON is the format that both export and import share and is the most reliable
 
-**About `system.tag.configure()`**:
-- This is Ignition's **documented scripting function** for programmatic tag creation
-- Docs: https://www.docs.inductiveautomation.com/docs/8.3/appendix/scripting-functions/system-tag/system-tag-configure
-- Runs in Ignition's Jython scripting environment (Gateway scope, client scope, or Designer scope)
-- Supports creating, modifying, and deleting tags
-- Accepts a base tag path and a list of tag configuration dictionaries
-- **Key limitation**: Cannot be called directly from external code — needs a bridge (WebDev module, custom module, or manual script console)
+**Q3: Authentication method?**
+- Ignition uses **API Tokens** (not Bearer/OAuth for the data API)
+- `POST /data/api/v1/api-token/generate` returns a `{ key, hash }` pair
+- The `key` is "the credential that the client will include with each request for authentication purposes"
+- The `hash` is sent to Ignition when creating the API token resource (via `/data/api/v1/resources/ignition/api-token`)
+- **The exact HTTP header name for sending the key is not documented in the spec** — must be verified empirically in Phase 1
 
-**About the Ignition Module SDK**:
-- Ignition modules are Java-based plugins installed on the Gateway
-- The SDK provides `GatewayContext.getTagManager()` for programmatic tag operations
-- Modules are packaged as `.modl` files and must be signed for production use
-- Docs: https://www.docs.inductiveautomation.com/docs/8.3/developers/module-development
-- Examples: https://github.com/inductiveautomation/ignition-module-examples
-- **Trade-off**: Most powerful but most complex (module lifecycle, signing, installation)
+**Q4: Collision policies?**
+- Fully documented: `Abort`, `Overwrite`, `Rename`, `Ignore`, `MergeOverwrite`
+- Maps to `DuplicateStrategy`: `SKIP` → `Ignore`, `UPDATE` → `MergeOverwrite`, `FAIL` → `Abort`
 
-### Three Candidate Approaches
+**Q5: Response format?**
+- Success (200): Returns `[]` (empty array) if all imports succeeded
+- Returns array of `{ level, userCode, diagnosticMessage }` quality code objects for any tags that failed
+- No other HTTP status codes documented for the import endpoint
 
-| # | Approach | Pros | Cons | Confidence |
-|---|----------|------|------|------------|
-| A | REST API (OpenAPI) | Simple, standalone CLI | May not exist for tags | LOW ❓ |
-| B | Module SDK (`TagManager`) | Full power, no external deps | Complex packaging, signing | HIGH ✅ |
-| C | Scripting Bridge (WebDev + `system.tag.configure()`) | Well-documented, moderate complexity | Requires WebDev module on Gateway | MEDIUM ⚡ |
+**Q6: Rate limiting / payload size limits?**
+- **Not documented in the OpenAPI spec** — must be tested in Phase 1
 
-### Action Required
+### Approach Decision
 
-Complete **Phase 0** of the implementation plan before proceeding:
-1. Inspect the actual OpenAPI spec on a live Ignition 8.3 instance
-2. Review `system.tag.configure()` documentation for exact schema
-3. Evaluate Module SDK if approaches A and C are insufficient
-4. Make a binding architecture decision
+| # | Approach | Status | Confidence |
+|---|----------|--------|------------|
+| A | REST API (Tag Import endpoint) | ✅ **SELECTED** | HIGH ✅ |
+| B | Module SDK (`TagManager`) | ❌ Not needed | N/A |
+| C | Scripting Bridge (WebDev) | ❌ Not needed | N/A |
+
+### Phase 1 Verification Tasks (Remaining Unknowns)
+
+These items need empirical testing against a live Ignition instance:
+
+1. **Exact auth header format** — how the API token key is sent in HTTP requests
+2. **Ignition JSON tag export format** — export sample tags and document the structure
+3. **CSV import column format** — what columns/headers does Ignition expect for CSV tag import?
+4. **Error response codes** — test 401, 400, etc. to document HTTP-level errors
+5. **Payload size limits** — test with 100, 1000, 10000 tags
+6. **Ignition data types** — export tags of various types to capture the exact type identifiers
+7. **OPC address format in JSON** — how `opcItemPath` and `opcServer` are represented in the export format
 
 ---
 
@@ -54,13 +62,14 @@ Complete **Phase 0** of the implementation plan before proceeding:
 
 | Resource | URL | Status |
 |----------|-----|--------|
-| Ignition 8.3 OpenAPI docs | https://www.docs.inductiveautomation.com/docs/8.3/platform/gateway/openapi | ⬜ Not reviewed |
-| `system.tag.configure()` | https://www.docs.inductiveautomation.com/docs/8.3/appendix/scripting-functions/system-tag/system-tag-configure | ⬜ Not reviewed |
-| Module SDK guide | https://www.docs.inductiveautomation.com/docs/8.3/developers/module-development | ⬜ Not reviewed |
-| Module SDK examples | https://github.com/inductiveautomation/ignition-module-examples | ⬜ Not reviewed |
-| Tag configuration properties | https://www.docs.inductiveautomation.com/docs/8.3/platform/tags | ⬜ Not reviewed |
-| WebDev module | https://www.docs.inductiveautomation.com/docs/8.3/platform/modules/web-dev | ⬜ Not reviewed |
-| Ignition data types | https://www.docs.inductiveautomation.com/docs/8.3/platform/tags/tag-properties | ⬜ Not reviewed |
+| Ignition 8.3 OpenAPI docs | https://www.docs.inductiveautomation.com/docs/8.3/platform/gateway/openapi | ✅ Reviewed — spec analyzed |
+| OpenAPI spec (local) | `./ignition_openapi_spec_1_0_0.json` | ✅ Analyzed — tag import/export endpoints confirmed |
+| `system.tag.configure()` | https://www.docs.inductiveautomation.com/docs/8.3/appendix/scripting-functions/system-tag/system-tag-configure | ⬜ Not needed (Approach A selected) |
+| Module SDK guide | https://www.docs.inductiveautomation.com/docs/8.3/developers/module-development | ⬜ Not needed (Approach A selected) |
+| Module SDK examples | https://github.com/inductiveautomation/ignition-module-examples | ⬜ Not needed (Approach A selected) |
+| Tag configuration properties | https://www.docs.inductiveautomation.com/docs/8.3/platform/tags | ⬜ Review in Phase 1 |
+| WebDev module | https://www.docs.inductiveautomation.com/docs/8.3/platform/modules/web-dev | ⬜ Not needed (Approach A selected) |
+| Ignition data types | https://www.docs.inductiveautomation.com/docs/8.3/platform/tags/tag-properties | ⬜ Review in Phase 1 |
 
 ---
 
@@ -78,7 +87,7 @@ Complete **Phase 0** of the implementation plan before proceeding:
 - ✅ User-facing interface: **REST API** (not CLI)
 - ✅ Framework: **Ktor** (Kotlin-native, lightweight)
 - ✅ Deployment: **Docker container**
-- ⬜ Ignition integration mechanism: **PENDING Phase 0**
+- ✅ Ignition integration mechanism: **Gateway REST API — `POST /data/api/v1/tags/import`** (Approach A)
 
 ## Key Dependencies (To Be Added)
 
@@ -144,23 +153,37 @@ implementation 'com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.x'
 ## Ignition API Research Checklist
 
 ### Documentation To Review
-- [ ] https://www.docs.inductiveautomation.com/docs/8.3/platform/gateway/openapi
-- [ ] OpenAPI v3 schema specification (if available)
-- [ ] Authentication methods documentation
-- [ ] Rate limiting / throttling info
-- [ ] Error response formats
-- [ ] Tag creation endpoint details
+- [x] https://www.docs.inductiveautomation.com/docs/8.3/platform/gateway/openapi — Analyzed via local spec file
+- [x] OpenAPI v3 schema specification — `ignition_openapi_spec_1_0_0.json` analyzed
+- [x] Authentication methods documentation — API Token mechanism confirmed
+- [ ] Rate limiting / throttling info — Not in spec, test in Phase 1
+- [x] Error response formats — QualityCode array documented
+- [x] Tag creation endpoint details — `POST /data/api/v1/tags/import` confirmed
 
-### Key Endpoints (FILL IN AFTER RESEARCH)
+### Key Endpoints (✅ CONFIRMED from OpenAPI spec)
 ```
-⚠️ UNVERIFIED — These are placeholder assumptions, NOT confirmed endpoints:
-[METHOD] /api/v[VERSION]/tags          ← MAY NOT EXIST
-[METHOD] /api/v[VERSION]/tags/{tagId}  ← MAY NOT EXIST
-Authentication: Bearer token / API Key / Basic Auth (UNVERIFIED)
-Request Format: JSON (FILL IN SCHEMA)
-Response Format: JSON (FILL IN SCHEMA)
-Rate Limit: [TBD]
-Max Payload Size: [TBD]
+POST /data/api/v1/tags/import          — Tag creation (bulk import)
+  Query params: provider (required), type (required: json|xml|csv),
+                collisionPolicy (required: Abort|Overwrite|Rename|Ignore|MergeOverwrite),
+                path (optional)
+  Body: application/octet-stream (tag export file bytes)
+  Response: JSON array of QualityCode objects (empty = all good)
+
+GET  /data/api/v1/tags/export          — Tag export (for format reference)
+  Query params: provider (required), type (required: json|xml),
+                path (optional), recursive (optional, default true),
+                includeUdts (optional, default true)
+
+POST /data/api/v1/api-token/generate   — Generate auth token (returns { key, hash })
+PUT  /data/api/v1/resources/ignition/api-token — Create API token resource
+GET  /data/api/v1/resources/find/ignition/api-token/{name} — Get token config
+PUT  /data/api/v1/managed-tag-provider — Manage tag provider settings
+
+Authentication: API Token (key from /api-token/generate, exact header TBD — Phase 1)
+Request Format: application/octet-stream (import), JSON (token ops)
+Response Format: JSON
+Rate Limit: Not documented — test in Phase 1
+Max Payload Size: Not documented — test in Phase 1
 ```
 
 ### Ignition Data Types Reference (FILL IN AFTER RESEARCH)
@@ -195,24 +218,33 @@ Likely types (confirm from docs):
 - [ ] Validation rules
 - [ ] Examples from documentation
 
-### Authentication (FILL IN AFTER RESEARCH)
+### Authentication (✅ CONFIRMED from OpenAPI spec)
 ```
-Method: [Bearer Token / API Key / Basic Auth / OAuth]
-Header: [FILL IN]
-Token Generation: [HOW TO GET TOKEN]
-Expiration: [IF APPLICABLE]
-Refresh: [IF APPLICABLE]
-Security: [HTTPS REQUIRED?]
+Method: API Token (key/hash pair)
+Token Generation: POST /data/api/v1/api-token/generate → { key, hash }
+Token Registration: POST /data/api/v1/resources/ignition/api-token (send hash)
+Header: TBD — exact header format not in OpenAPI spec (Phase 1 verification)
+Expiration: Not documented — likely configured per-token
+Security: HTTPS strongly recommended (spec warns key could be compromised over HTTP)
+Token Config: secureChannelRequired (boolean), securityLevels (array)
 ```
 
-### Error Codes (FILL IN AFTER RESEARCH)
+### Error Codes (Partially confirmed from OpenAPI spec)
 ```
-400 Bad Request: [COMMON CAUSES]
-401 Unauthorized: [COMMON CAUSES]
-403 Forbidden: [COMMON CAUSES]
-409 Conflict: [TAG EXISTS?]
-429 Too Many Requests: [RATE LIMIT]
-500 Server Error: [COMMON CAUSES]
+Import endpoint (/tags/import):
+  200 OK: Returns List<QualityCode> — empty array = success, non-empty = per-tag errors
+         QualityCode: { level: string, userCode: integer, diagnosticMessage: string }
+  (Other HTTP status codes not documented for import — test empirically in Phase 1)
+
+Token generation (/api-token/generate):
+  200 OK: Returns { key, hash }
+  403 Forbidden: Request does not have required write permissions
+  500 Server Error: Server error during token generation
+
+General (test in Phase 1):
+  400 Bad Request: [TBD]
+  401 Unauthorized: [TBD — likely invalid/missing API token]
+  429 Too Many Requests: [TBD — rate limiting not documented]
 ```
 
 ---
@@ -474,14 +506,17 @@ upload {
 - [ ] Research typical tag naming conventions at client sites
 - [ ] Confirm OPC-UA vs other protocol support
 
-### Known Unknowns (To Research)
-1. Exact OpenAPI endpoint for tag creation
-2. Authentication mechanism (Bearer? API Key? Basic?)
-3. Supported data types in Ignition 8.3
-4. Tag namespace/folder structure requirements
-5. Batch operation support and limits
-6. Error response format and codes
-7. Rate limiting policies
+### Known Unknowns (Remaining for Phase 1)
+1. ~~Exact OpenAPI endpoint for tag creation~~ ✅ `POST /data/api/v1/tags/import`
+2. ~~Authentication mechanism~~ ✅ API Token (key/hash) — **exact HTTP header TBD**
+3. Supported data types in Ignition 8.3 — export sample tags to capture type identifiers
+4. Tag namespace/folder structure — `path` query param confirmed, format TBD
+5. ~~Batch operation support~~ ✅ Import endpoint takes entire file (inherently batch)
+6. ~~Error response format~~ ✅ `List<QualityCode>` with `{ level, userCode, diagnosticMessage }`
+7. Rate limiting policies — not documented, test empirically
+8. **NEW**: Exact Ignition JSON tag export structure (needed to construct import payloads)
+9. **NEW**: CSV import column schema (if CSV format is desired)
+10. **NEW**: Per-tag error granularity in QualityCode response
 
 ### Potential Challenges
 1. Ignition API documentation may be incomplete
