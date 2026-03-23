@@ -8,93 +8,39 @@
 
 ---
 
-## The Core Question
-
-**How do you programmatically create tags in Ignition SCADA?**
-
-There are three possible mechanisms. We must determine which one(s) work before writing any integration code.
-
-| Approach | Mechanism | Deployment Model | Complexity |
-|----------|-----------|-------------------|------------|
-| **A. Gateway REST API** | HTTP POST to Ignition OpenAPI endpoint | REST API service (Ktor) + OkHttp outbound | Low |
-| **B. Module SDK** | Java/Kotlin code using `TagManager`/`TagProvider` | Ignition Module with embedded REST API, or separate REST API service calling into module | High |
-| **C. Scripting Bridge** | Call `system.tag.configure()` via WebDev module endpoint | REST API service (Ktor) + OkHttp to WebDev | Medium |
-
-> **Note on Approach B**: If Phase 0 selects the Module SDK, the REST API may need to live *inside* the Ignition module (using Ignition's servlet context) or be a separate service that communicates with the module. This interaction will be designed during Phase 1 prototyping.
-
----
-
 ## Phase 0: Research & Verification (✅ COMPLETE)
 
 **Goal**: Determine which tag-creation mechanism to use, with evidence.
 
-### 0.1 Investigate the Ignition OpenAPI Specification
+Three approaches were evaluated:
 
-**What to check**:
-1. Open a running Ignition 8.3 Gateway and navigate to the OpenAPI docs:
-   - `https://<gateway>:8043/system/openapi.json` (or `/system/openapi.yaml`)
-   - Gateway web UI → Status → OpenAPI section
-   - Docs: https://www.docs.inductiveautomation.com/docs/8.3/platform/gateway/openapi
-2. Search the spec for any tag-related endpoints:
-   - `tags`, `tag-config`, `tag-provider`, `tag-management`
-   - Look for POST/PUT methods (not just GET)
-3. Check if tag creation is listed or if the API is read-only for tags
+| Approach | Mechanism | Result |
+|----------|-----------|--------|
+| **A. Gateway REST API** | HTTP POST to `POST /data/api/v1/tags/import` | ✅ **SELECTED** — confirmed via OpenAPI spec |
+| **B. Module SDK** | Java/Kotlin code using `TagManager`/`TagProvider` | ❌ Not needed |
+| **C. Scripting Bridge** | Call `system.tag.configure()` via WebDev module | ❌ Not needed |
 
-**Expected finding**: Ignition's Gateway OpenAPI likely covers system status, licensing, alarming, auditing, and project resources — but **may NOT include tag creation**. The OpenAPI in Ignition 8.x has historically been limited in scope.
-
-**Deliverable**: Document the exact endpoints available. If tag creation exists, record the path, method, request schema, and auth mechanism. If it doesn't exist, document that definitively.
-
-### 0.2 Investigate `system.tag.configure()`
-
-**What to check**:
-1. Ignition scripting docs for `system.tag.configure()`:
-   - https://www.docs.inductiveautomation.com/docs/8.3/appendix/scripting-functions/system-tag/system-tag-configure
-2. This function is the **known, documented way** to create tags programmatically in Ignition
-3. Determine:
-   - Full function signature and parameters
-   - JSON/dict structure for tag configuration
-   - Whether it supports batch creation
-   - What tag properties are required vs optional
-   - How tag paths/folders work
-   - Supported data types (the `dataType` enum values)
-   - How OPC addresses are specified (`opcItemPath` property)
-   - Error handling / return values
-
-**Key detail**: `system.tag.configure()` runs inside Ignition's scripting environment (Jython). To call it from an external tool, we need a bridge — either:
-- The **WebDev module** (exposes custom HTTP endpoints that can run scripts)
-- A **custom Gateway module** (runs Java/Kotlin code with access to `GatewayContext`)
-- The **Gateway Script Console** (manual, not automatable)
-
-**Deliverable**: Document the exact function signature, tag configuration schema, and supported data types.
-
-### 0.3 Investigate the Ignition Module SDK (if needed)
-
-**What to check** (only if Approaches A and C are insufficient):
-1. Ignition Module SDK docs:
-   - https://www.docs.inductiveautomation.com/docs/8.3/developers/module-development
-   - SDK GitHub: https://github.com/inductiveautomation/ignition-module-examples
-2. Key interfaces:
-   - `com.inductiveautomation.ignition.gateway.model.GatewayContext`
-   - `com.inductiveautomation.ignition.common.tags.model.TagManager`
-   - `com.inductiveautomation.ignition.common.tags.model.TagProvider`
-   - `com.inductiveautomation.ignition.common.tags.config.TagConfiguration`
-3. Module packaging: `.modl` file format, `module.xml` descriptor
-4. Signing requirements (Ignition modules must be signed for production)
-
-**Deliverable**: Document whether the Module SDK provides tag creation APIs and what the module packaging/deployment requirements are.
-
-### 0.4 Decision Gate ✅ COMPLETE
+### Decision Gate
 
 | Question | Answer |
 |----------|--------|
 | Does the OpenAPI have a tag creation endpoint? | **YES** — `POST /data/api/v1/tags/import` |
 | What is the endpoint path and method? | `POST /data/api/v1/tags/import?provider=<name>&type=json&collisionPolicy=<policy>&path=<optional>` |
 | Does `system.tag.configure()` work for our use case? | Yes, but **not needed** — REST API is sufficient |
-| Is the WebDev module available in the target environment? | **Not needed** — REST API is sufficient |
 | Do we need a full Ignition Module? | **NO** |
 | **Chosen approach**: | **A — Gateway REST API (Tag Import endpoint)** |
 
-**Phase 0 complete. Proceeding to Phase 1.**
+### Key Findings
+- **Import endpoint**: Accepts `application/octet-stream` body (tag export file bytes) with query params for `provider`, `type` (json/xml/csv), `collisionPolicy`, and optional `path`
+- **Export endpoint**: `GET /data/api/v1/tags/export` produces JSON or XML — use this to capture the exact tag format for constructing import payloads
+- **Authentication**: API Token key/hash pair via `POST /data/api/v1/api-token/generate`
+- **Response**: `List<QualityCode>` — empty array = success, non-empty = errors with `{ level, userCode, diagnosticMessage }`
+- **Collision policies**: `Abort`, `Overwrite`, `Rename`, `Ignore`, `MergeOverwrite`
+
+### Fallback Plan
+If Phase 1 prototyping reveals the import endpoint can't handle the use case (e.g., the JSON structure is impractical to generate, or auth doesn't work as expected), fall back to **Approach C** (WebDev module + `system.tag.configure()`). This is well-documented and provides individual tag creation with explicit error handling per tag. Approach B (Module SDK) is a last resort due to packaging/signing complexity.
+
+See `CONTEXT.md` for full research details.
 
 ---
 
@@ -164,13 +110,14 @@ There are three possible mechanisms. We must determine which one(s) work before 
    - Takes a list of `TagDefinition`, serializes to Ignition JSON export format
    - POSTs as `application/octet-stream` with `type=json`
 2. Authentication handling — API Token key (generated via `/data/api/v1/api-token/generate`)
-3. Collision policy mapping:
+3. Collision policy mapping (⚠️ **verify in Phase 1** — `Overwrite` vs `MergeOverwrite` semantics need testing):
    - `DuplicateStrategy.SKIP` → `Ignore`
-   - `DuplicateStrategy.UPDATE` → `MergeOverwrite`
+   - `DuplicateStrategy.UPDATE` → `Overwrite` (replaces tag entirely) or `MergeOverwrite` (merges folder structure, overwrites conflicting tags) — **Phase 1 must test both to determine correct mapping**
    - `DuplicateStrategy.FAIL` → `Abort`
 4. Response parsing — `List<QualityCode>` with `{ level, userCode, diagnosticMessage }`
    - Empty array = all tags imported successfully
-   - Non-empty = report per-tag errors
+   - Non-empty = report errors. **Note**: It is unknown whether QualityCodes map 1:1 to individual tags or are aggregated. Phase 1 must test with intentional failures to determine granularity.
+   - **Fallback if no per-tag mapping**: Report all QualityCodes as batch-level errors, mark all tags as "status unknown," and include the raw diagnosticMessages in the response. Users would need to verify in Ignition Designer.
 5. Retry logic with exponential backoff
 6. Batching strategy — one POST with all tags; for very large imports (10k+), chunk into multiple POSTs
 7. Integration tests against mock or real Gateway
@@ -178,16 +125,17 @@ There are three possible mechanisms. We must determine which one(s) work before 
 ### 2.5 Orchestrator (1 day)
 1. `TagUploader` — coordinates parse → validate → create
 2. Invoked by the REST API endpoint handler (not a main function)
-3. Result aggregation (success/failure counts per row)
-4. Configurable error strategy (fail-fast vs continue-on-error)
-5. Idempotency handling (skip existing, update, or fail on duplicates — configurable)
+3. Result aggregation (success/failure counts)
+4. Error strategy: The import endpoint is atomic (single POST), so fail-fast vs continue only applies to **validation** (stop on first validation error vs collect all). The `onError` config controls validation behavior, not import behavior. If validation passes, the import is all-or-nothing per batch.
+5. Idempotency handling via collision policy (skip existing, update, or fail on duplicates — configurable)
+6. For very large imports (10k+), the orchestrator chunks into multiple POSTs. `onError` then also controls whether to abort remaining chunks after a failed batch.
 
 ### 2.6 REST API Layer (1–2 days)
 1. Ktor server with Netty engine
 2. Endpoints:
    - `POST /api/upload` — multipart file upload (accepts CSV, XLS, XLSX)
      - Request: multipart form data with `file` part + optional JSON config
-     - Config fields: `gatewayUrl`, `tagProvider`, `basePath`, `dryRun`, `onError` (continue|stop), `onDuplicate` (skip|update|fail), `encoding`
+     - Config fields: `gatewayUrl`, `tagProvider`, `basePath`, `dryRun`, `onError` (continue|stop — controls validation and multi-batch behavior), `onDuplicate` (skip|update|fail), `encoding`
      - Response: JSON with validation results, per-tag success/failure, summary counts
    - `GET /api/health` — health check (returns service status + Ignition connectivity)
    - `GET /api/types` — list supported Ignition data types
@@ -229,6 +177,7 @@ Config JSON:
   "dryRun": false,
   "onError": "continue",
   "onDuplicate": "skip",
+  "opcServer": "Ignition OPC UA Server",
   "encoding": "UTF-8"
 }
 ```
@@ -297,7 +246,8 @@ Same request with `"dryRun": true` in config. Response has `"status": "validated
 data class TagDefinition(
     val name: String,                           // Required: tag name
     val path: String = "",                      // Tag folder path (e.g., "Facility/Zone1")
-    val address: String,                        // Required: OPC item path or device address
+    val opcItemPath: String,                    // Required: device-relative OPC item path (e.g., "[PLC1]Zone1/Temp")
+    val opcServer: String = "",                 // OPC server name (if not embedded in item path)
     val dataType: String,                       // Required: int, float, string, bool, etc.
     val description: String? = null,            // Optional: tag description
     val enabled: Boolean = true,                // Optional: tag enabled state
@@ -317,7 +267,7 @@ data class UploadConfig(
     val encoding: String = "UTF-8"
 )
 
-enum class ErrorStrategy { CONTINUE, STOP }
+enum class ErrorStrategy { CONTINUE, STOP }  // Controls validation and multi-batch behavior (not single import — that's atomic)
 enum class DuplicateStrategy { SKIP, UPDATE, FAIL }
 
 data class UploadResponse(
@@ -337,9 +287,12 @@ data class UploadSummary(
 data class TagResult(
     val row: Int,
     val name: String,
-    val status: String,                         // "created", "updated", "skipped", "failed"
+    val status: String,                         // "created", "updated", "skipped", "failed", "unknown"
     val error: String? = null
 )
+// Note: If the import endpoint doesn't provide per-tag granularity in its QualityCode
+// response, individual tag statuses may be "unknown" with batch-level errors reported
+// in a separate `batchErrors` field on UploadResponse.
 
 // === Validation Models ===
 
@@ -370,10 +323,8 @@ data class ValidationError(
 - Testing: JUnit 5 + MockK + Ktor Test Client
 - JVM: Java 11+
 
-**Depends on chosen Ignition approach**:
-- If A or C: OkHttp 5.x (HTTP client for outbound calls to Ignition)
-- If B: Ignition Module SDK (adds module packaging, signing, `GatewayModuleHook`)
-- If C: Requires WebDev module installed on Ignition Gateway
+**Ignition Integration**:
+- HTTP Client: Ktor Client (CIO engine) for outbound calls to Ignition Gateway — avoids a separate OkHttp dependency since Ktor is already in use
 
 **Note**: Use current dependency versions. Previous plan pinned 2023-era versions.
 
@@ -405,7 +356,9 @@ ignition {
         retries = 3
     }
     auth {
-        token = ${?IGNITION_API_TOKEN}
+        # The API key (not the hash) — this is the credential sent with each request.
+        # Generated via POST /data/api/v1/api-token/generate (the "key" field).
+        apiKey = ${?IGNITION_API_KEY}
     }
 }
 

@@ -118,8 +118,11 @@ testImplementation 'io.ktor:ktor-client-content-negotiation'
 
 ### HTTP Client (outbound calls to Ignition)
 ```gradle
-// OkHttp for calling Ignition Gateway
-implementation 'com.squareup.okhttp3:okhttp:5.x'
+// Ktor Client for calling Ignition Gateway (avoids separate OkHttp dependency)
+implementation 'io.ktor:ktor-client-core'
+implementation 'io.ktor:ktor-client-cio'           // CIO engine
+implementation 'io.ktor:ktor-client-content-negotiation'
+implementation 'io.ktor:ktor-serialization-jackson'
 ```
 
 ### Logging
@@ -212,11 +215,12 @@ Likely types (confirm from docs):
 - [ ] Namespace/path requirements (folder structure)
 - [ ] Reserved names
 
-### Address Format Requirements (FILL IN AFTER RESEARCH)
-- [ ] OPC-UA address format (e.g., `opc.tcp://host:port/path`)
-- [ ] Device specific (ModBus, Ethernet IP, etc.)
+### Address Format Requirements (Partially known — verify in Phase 1)
+- [ ] OPC item path format — likely `[DeviceName]path/to/item` (device-relative, NOT `opc.tcp://` URI)
+- [ ] How `opcItemPath` and `opcServer` appear in Ignition's JSON export format
+- [ ] Device specific variations (ModBus, Ethernet IP, etc.)
 - [ ] Validation rules
-- [ ] Examples from documentation
+- [ ] Examples from exported tag JSON
 
 ### Authentication (✅ CONFIRMED from OpenAPI spec)
 ```
@@ -256,9 +260,10 @@ General (test in Phase 1):
    - Tag name in Ignition
    - Must follow Ignition naming rules
    
-2. **address** (required)
-   - Device/OPC address
-   - Format depends on device type
+2. **opcItemPath** (required)
+   - Device-relative OPC item path in Ignition format
+   - Typically `[DeviceName]path/to/item` or just `path/to/item` if OPC server is specified separately
+   - **NOT** an OPC UA connection URI (`opc.tcp://...`) — that's the server address, not the item path
    
 3. **dataType** (required)
    - Ignition data type identifier
@@ -268,94 +273,116 @@ General (test in Phase 1):
    - User-friendly description
    - Can be empty/blank
 
+5. **opcServer** (optional)
+   - OPC server name if not embedded in the item path
+   - Can be set globally via upload config or per-tag in the spreadsheet
+
 ### Example Spreadsheet
 
 #### CSV Format
 ```csv
-name,address,dataType,description
-Temperature_Zone1,opc.tcp://plc1:4840/Zone1/Temp,float,Main zone temperature sensor
-Pressure_Zone1,opc.tcp://plc1:4840/Zone1/Pressure,float,Main zone pressure gauge
-RunStatus,opc.tcp://plc1:4840/Status,bool,System running state
+name,opcItemPath,dataType,description
+Temperature_Zone1,[PLC1]Zone1/Temp,Float,Main zone temperature sensor
+Pressure_Zone1,[PLC1]Zone1/Pressure,Float,Main zone pressure gauge
+RunStatus,[PLC1]Status,Boolean,System running state
 ```
 
 #### Excel Format
-| name | address | dataType | description |
-|------|---------|----------|-------------|
-| Temperature_Zone1 | opc.tcp://plc1:4840/Zone1/Temp | float | Main zone temperature sensor |
-| Pressure_Zone1 | opc.tcp://plc1:4840/Zone1/Pressure | float | Main zone pressure gauge |
-| RunStatus | opc.tcp://plc1:4840/Status | bool | System running state |
+| name | opcItemPath | dataType | description |
+|------|-------------|----------|-------------|
+| Temperature_Zone1 | [PLC1]Zone1/Temp | Float | Main zone temperature sensor |
+| Pressure_Zone1 | [PLC1]Zone1/Pressure | Float | Main zone pressure gauge |
+| RunStatus | [PLC1]Status | Boolean | System running state |
+
+> **Note**: The exact OPC item path format (`[DeviceName]path` vs other conventions) will be confirmed in Phase 1 by exporting existing tags from Ignition and inspecting the JSON structure.
 
 ### Validation Rules
-- [ ] All required columns present
+- [ ] All required columns present (`name`, `opcItemPath`, `dataType`)
 - [ ] No duplicate tag names
 - [ ] Valid tag names per Ignition rules
 - [ ] Valid data types
-- [ ] Valid address formats
+- [ ] Valid OPC item path format
 - [ ] No excessive whitespace
 
 ---
 
 ## Implementation Tracking
 
-### Phase 1: Core Infrastructure
-- [ ] Gradle project initialized
-- [ ] Dependencies added to build.gradle.kts
-- [ ] Package structure created
-- [ ] Data models created (TagDefinition, ApiResponse, ValidationResult)
-- [ ] Exception hierarchy defined
-- [ ] Logging configured
+> Aligned with PLAN.md phases. Phase 0 = Research (complete). Phase 1 = Prototype. Phase 2 = Full Implementation.
 
-### Phase 2: Spreadsheet Parsing
-- [ ] Abstract SpreadsheetParser base class
-- [ ] CSV parser implementation
-- [ ] XLSX parser implementation
-- [ ] XLS parser implementation
-- [ ] Factory pattern implemented
+### Phase 0: Research & Verification ✅
+- [x] Investigate Ignition OpenAPI spec
+- [x] Identify tag creation endpoint (`POST /data/api/v1/tags/import`)
+- [x] Identify authentication mechanism (API Token key/hash)
+- [x] Decision gate — Approach A selected
+
+### Phase 1: Prototype (PLAN.md §1.1–1.2)
+- [ ] Kotlin/Gradle project with Ktor server
+- [ ] `POST /api/upload` skeleton endpoint
+- [ ] `GET /api/health` endpoint
+- [ ] Generate API token and test auth header format
+- [ ] Export existing tag to capture JSON format
+- [ ] Import one tag via `POST /data/api/v1/tags/import`
+- [ ] Verify tag appears in Ignition Designer
+- [ ] Document request/response format
+- [ ] Test `Overwrite` vs `MergeOverwrite` collision policy semantics
+- [ ] Test QualityCode response granularity (per-tag or batch-level?)
+
+### Phase 2: Full Implementation (PLAN.md §2.1–2.7)
+
+#### 2.1 Core Infrastructure
+- [ ] Gradle project with all dependencies
+- [ ] Data models (TagDefinition, UploadRequest, UploadResponse, ValidationResult)
+- [ ] Exception hierarchy
+- [ ] Logging (SLF4J + Logback)
+
+#### 2.2 Spreadsheet Parsing
+- [ ] SpreadsheetParser interface
+- [ ] CSV parser (OpenCSV)
+- [ ] XLSX parser (Apache POI)
+- [ ] XLS parser (Apache POI)
+- [ ] Factory pattern for format detection
 - [ ] Header validation
 - [ ] Unit tests for all formats
 
-### Phase 3: Validation & Mapping
+#### 2.3 Validation & Type Mapping
 - [ ] TagValidator implementation
 - [ ] DataTypeMapper implementation
-- [ ] Data type constraint database
 - [ ] Tag naming validation
-- [ ] Address format validation
+- [ ] OPC item path format validation
 - [ ] Unit tests
 
-### Phase 4: API Integration
-- [ ] Research Ignition OpenAPI
-- [ ] IgnitionApiClient implementation
-- [ ] Authentication handling
-- [ ] Retry logic
-- [ ] Error mapping
-- [ ] Integration tests with mock API
+#### 2.4 Tag Creation Client
+- [ ] IgnitionImportClient implementation
+- [ ] API Token authentication
+- [ ] Collision policy mapping (verified in Phase 1)
+- [ ] QualityCode response parsing
+- [ ] Retry logic with exponential backoff
+- [ ] Batching for large imports
+- [ ] Integration tests (mock + real Gateway)
 
-### Phase 5: Orchestrator
-- [ ] TagUploader main class
-- [ ] Workflow coordination
-- [ ] Progress reporting
+#### 2.5 Orchestrator
+- [ ] TagUploader coordination (parse → validate → create)
 - [ ] Result aggregation
-- [ ] Error recovery
-- [ ] End-to-end tests
+- [ ] Validation error strategy (continue vs stop)
+- [ ] Multi-batch error strategy (continue vs abort remaining)
 
-### Phase 6: REST API Layer
+#### 2.6 REST API Layer
 - [ ] Ktor server with Netty engine
-- [ ] POST /api/upload endpoint (multipart file upload)
-- [ ] GET /api/health endpoint
-- [ ] GET /api/types endpoint
+- [ ] POST /api/upload (multipart file upload)
+- [ ] GET /api/health
+- [ ] GET /api/types
 - [ ] Content negotiation (Jackson JSON)
-- [ ] File size limits
-- [ ] CORS configuration
-- [ ] Request logging
-- [ ] application.conf configuration
+- [ ] File size limits, CORS, request logging
 
-### Phase 7: Documentation & Polish
-- [ ] README.md
-- [ ] KDoc comments
-- [ ] Usage examples
+#### 2.7 Testing & Documentation
+- [ ] Unit tests (>80% coverage)
+- [ ] API integration tests (Ktor test client)
+- [ ] Integration tests with mock Ignition Gateway
 - [ ] Sample spreadsheets
-- [ ] Test coverage report
-- [ ] Security review
+- [ ] OpenAPI/Swagger spec for our REST API
+- [ ] README with usage examples
+- [ ] Troubleshooting guide
 
 ---
 
@@ -364,7 +391,7 @@ RunStatus,opc.tcp://plc1:4840/Status,bool,System running state
 ### Environment Variables
 ```bash
 IGNITION_GATEWAY_URL=https://ignition.example.com:8043
-IGNITION_API_TOKEN=your_api_token_here
+IGNITION_API_KEY=your_api_key_here   # The "key" from /api-token/generate (not the hash)
 LOG_LEVEL=INFO
 ```
 
@@ -388,7 +415,9 @@ ignition {
         retries = 3
     }
     auth {
-        token = ${?IGNITION_API_TOKEN}
+        # The API key (not the hash) — this is the credential sent with each request.
+        # Generated via POST /data/api/v1/api-token/generate (the "key" field).
+        apiKey = ${?IGNITION_API_KEY}
     }
 }
 
@@ -453,12 +482,6 @@ upload {
 - [ ] Health check endpoint for container orchestration
 - [ ] Document Docker usage and deployment
 
-### If Approach B (Module SDK)
-- [ ] Package Ignition module as `.modl`
-- [ ] Determine if REST API lives inside module or as separate service
-- [ ] Module signing for production
-- [ ] Document installation steps
-
 ---
 
 ## Documentation Structure
@@ -487,7 +510,7 @@ upload {
 ### Libraries
 - Apache POI: https://poi.apache.org/
 - OpenCSV: https://opencsv.sourceforge.net/
-- OkHttp: https://square.github.io/okhttp/
+- Ktor Server: https://ktor.io/docs/server-create-a-new-project.html
 - Ktor Client: https://ktor.io/docs/client.html
 - Kotlin Documentation: https://kotlinlang.org/docs/
 
@@ -500,9 +523,9 @@ upload {
 ## Notes & Observations
 
 ### Pre-Implementation Research
-- [ ] Confirm Ignition 8.3 supports programmatic tag creation via OpenAPI
+- [x] Confirm Ignition 8.3 supports programmatic tag creation via OpenAPI — ✅ `POST /data/api/v1/tags/import`
 - [ ] Verify Java 11+ compatibility
-- [ ] Check if batch tag creation is supported
+- [x] Check if batch tag creation is supported — ✅ Import endpoint takes entire file (inherently batch)
 - [ ] Research typical tag naming conventions at client sites
 - [ ] Confirm OPC-UA vs other protocol support
 
@@ -529,6 +552,20 @@ upload {
 ---
 
 ## Version History
+
+### 2026-03-23 - Phase 0 Resolved & Plan Review
+- Analyzed Ignition OpenAPI spec (`ignition_openapi_spec_1_0_0.json`)
+- Confirmed tag import endpoint: `POST /data/api/v1/tags/import`
+- Confirmed API Token authentication mechanism
+- Selected Approach A (Gateway REST API)
+- Added fallback plan (Approach C) if Phase 1 reveals issues
+- Fixed OPC address format in examples (device-relative paths, not `opc.tcp://` URIs)
+- Aligned phase numbering between PLAN.md and CONTEXT.md
+- Replaced OkHttp with Ktor Client for HTTP calls
+- Clarified ErrorStrategy scope (validation + multi-batch, not single atomic import)
+- Flagged per-tag error reporting as unverified assumption
+- Flagged `Overwrite` vs `MergeOverwrite` mapping as needing Phase 1 verification
+- Renamed `IGNITION_API_TOKEN` → `IGNITION_API_KEY` to match spec terminology
 
 ### 2026-03-23 - Initial Planning
 - Created PLAN.md with 7-phase implementation strategy
